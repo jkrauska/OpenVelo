@@ -2,6 +2,43 @@ Gist:
 
 Let's try to make something like a pocket radar using cheap parts.
 
+```text
+1. Pi  - $30-$50
+Zero 2 W, MicroSD Card, OTG Adapter
+
+2. USB Audio Dongle - $10
+✔ USB Sound Card With Mic Input
+	•	Movo USB-AC 3.5 TRS
+
+3. Power-Line Noise Filter - $5
+(You need this to keep Pi 5V switching noise out of radar IF path.)
+✔ LC Filter Module (5–36V, 3A)
+	•	“LC Low Pass Filter”
+	•	“DC Ripple Filter”
+	•	“Interference Suppressor”
+
+4. Preamp - $5
+✔ MAX9814 Microphone Amplifier Module
+	•	Automatic gain control (AGC)
+	•	Selectable gain: 40 dB / 50 dB / 60 dB
+	•	Input = electret mic bias style, requires AC coupling
+	•	Output = clean amplified audio to sound card
+
+5. Coupling Capacitor - $1
+✔ 1 µF X7R Ceramic Capacitor (25V or higher)
+Used between CDM324 IF → MAX9814 MIC IN
+
+6. Radar Module $10
+✔ CDM324 Doppler Radar Sensor
+	•	3.3–5V version
+	•	Has 3 pins: VCC, GND, IF
+
+7. Cabling
+✔ 3.5mm TRS Male → Bare-Wire “Pigtail” Cable - $5
+✔ Breadboard, jumpers
+```
+
+
 
 
 
@@ -82,117 +119,3 @@ Use a **star ground** if possible:
 ```
 
 
-```mermaid
-flowchart LR
-
-  %% Power path
-  PSU[5V Power Supply]
-  PI5V[Pi 5V Pin]
-  PIGND[Pi GND Pin]
-
-  PSU --> PI5V
-  PSU --> PIGND
-
-  PI5V --> LC_IN[LC Filter Input Plus]
-  PIGND --> LC_IN_GND[LC Filter Input Ground]
-
-  LC_IN --> LC_OUT[LC Filter Output Clean 5V]
-  LC_IN_GND --> LC_OUT_GND[LC Filter Output Ground]
-
-  LC_OUT --> RAD_VCC[CDM324 VCC]
-  LC_OUT_GND --> RAD_GND[CDM324 GND]
-
-  LC_OUT --> PRE_VDD[MAX9814 VDD]
-  LC_OUT_GND --> PRE_GND[MAX9814 GND]
-
-  %% Signal path
-  RAD_IF[CDM324 IF] --> CAP[One Microfarad Coupling Capacitor]
-  CAP --> PRE_IN[MAX9814 Mic Input]
-
-  PRE_OUT[MAX9814 Output] --> TRS_CABLE[TRS Pigtail Cable]
-  TRS_CABLE --> USB_MIC_IN[USB Sound Card Mic Input]
-
-  USB_CARD[USB Sound Card] --> OTG_ADAPTER[USB OTG Adapter]
-  OTG_ADAPTER --> PI_USB[Pi Zero USB Port]
-
-  %% Grounding
-  RAD_GND --- STAR_GND[Common Ground Point]
-  PRE_GND --- STAR_GND
-  LC_OUT_GND --- STAR_GND
-  PIGND --- STAR_GND
-
-  %% Notes
-  GAIN_NOTE:::note
-  AR_NOTE:::note
-
-  PRE_IN -.-> GAIN_NOTE
-  PRE_IN -.-> AR_NOTE
-
-  classDef note fill:#eef,stroke:#88a,stroke-width:1px,color:#000;
-  GAIN_NOTE[MAX9814 Gain Pin Connect to Ground for 50 dB]
-  AR_NOTE[MAX9814 AR Pin Leave Unconnected]
-```
-
-Pin Out
-```mermaid
-flowchart TB
-
-  subgraph PI[Pi Zero Header Pins]
-    PI_PIN2[Pin 2 5V]
-    PI_PIN6[Pin 6 GND]
-    PI_USBPORT[Pi USB Data Port]
-  end
-
-  subgraph LC[LC Filter Module Pins]
-    LC_INP[IN Plus]
-    LC_ING[IN Ground]
-    LC_OUTP[OUT Clean 5V]
-    LC_OUTG[OUT Ground]
-  end
-
-  subgraph RAD[CDM324 Pins]
-    RAD_VCC[VCC]
-    RAD_IF[IF]
-    RAD_GND[GND]
-  end
-
-  subgraph PRE[MAX9814 Pins]
-    PRE_VDD[VDD]
-    PRE_GND[GND]
-    PRE_IN[Mic Input]
-    PRE_OUT[Out]
-    PRE_GAIN[Gain]
-    PRE_AR[AR]
-  end
-
-  subgraph USB[USB Sound Card]
-    USB_MIC[Mic Input Jack]
-    USB_GND[Mic Ground]
-    USB_USB[USB Plug]
-  end
-
-  CAP[One Microfarad Coupling Capacitor]
-  TRS[TRS Pigtail Cable]
-
-  %% Power connections
-  PI_PIN2 --> LC_INP
-  PI_PIN6 --> LC_ING
-
-  LC_OUTP --> RAD_VCC
-  LC_OUTG --> RAD_GND
-
-  LC_OUTP --> PRE_VDD
-  LC_OUTG --> PRE_GND
-
-  %% Signal connections
-  RAD_IF --> CAP --> PRE_IN
-  PRE_OUT --> TRS --> USB_MIC
-  PRE_GND --> USB_GND
-
-  %% USB data to Pi
-  USB_USB --> PI_USBPORT
-
-  %% Gain setup
-  PRE_GAIN --> PRE_GND
-  PRE_AR -. leave floating .- PRE_AR
-```
