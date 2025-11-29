@@ -6,10 +6,12 @@ Based on techniques from stream_visualizer.py
 
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 from scipy import signal, fft
 from scipy.io import wavfile
 from scipy.interpolate import interp1d
 import os
+import math
 
 # Constants (similar to stream_visualizer.py)
 SPECTROGRAM_LENGTH = 500  # Number of FFT frames in spectrogram
@@ -199,15 +201,15 @@ def wiener_filter(data, sample_rate, noise_duration=0.1):
     
     return denoised_data
 
-def apply_bandpass_filter(data, sample_rate, lowcut=50, highcut=4000, order=4):
+def apply_bandpass_filter(data, sample_rate, lowcut=100, highcut=2500, order=4):
     """
     Apply a band-pass filter to remove noise outside the Doppler frequency range.
     
     Args:
         data: Input audio signal
         sample_rate: Sample rate in Hz
-        lowcut: Low frequency cutoff in Hz (default 50 Hz to remove DC and low-frequency noise)
-        highcut: High frequency cutoff in Hz (default 4000 Hz)
+        lowcut: Low frequency cutoff in Hz (default 100 Hz to remove DC and low-frequency noise)
+        highcut: High frequency cutoff in Hz (default 2500 Hz)
         order: Filter order (higher = sharper cutoff, default 4)
     
     Returns:
@@ -296,14 +298,45 @@ def save_wav_file(data, sample_rate, output_filepath):
     wavfile.write(output_filepath, sample_rate, data_int16)
     print(f"Saved processed audio to: {output_filepath}")
 
-def hz_to_mph(fd_hz):
-    """Convert Doppler frequency shift to speed in mph."""
-    mps = fd_hz / HZ_PER_MPS
-    return mps * MPS_TO_MPH
+def hz_to_mph(fd_hz, angle_degrees=0.0):
+    """
+    Convert Doppler frequency shift to speed in mph.
+    
+    Args:
+        fd_hz: Doppler frequency shift in Hz
+        angle_degrees: Angle between target motion and line-of-sight (0° = directly toward/away)
+                       Default 0° assumes direct line-of-sight motion.
+    
+    Returns:
+        Speed in mph
+    
+    Physics:
+        Doppler shift measures radial velocity: v_r = fd / (2 * f0 / c)
+        If target moves at angle θ from line-of-sight, radial velocity is: v_r = v * cos(θ)
+        Therefore actual speed: v = v_r / cos(θ)
+        For 45° angle: v = v_r / cos(45°) = v_r / 0.707 ≈ v_r * 1.414
+    """
+    # Calculate radial velocity from Doppler shift (m/s)
+    radial_velocity_mps = fd_hz / HZ_PER_MPS
+    
+    # If angle is 0, no correction needed (direct line-of-sight)
+    if angle_degrees == 0.0:
+        actual_velocity_mps = radial_velocity_mps
+    else:
+        # Convert angle to radians
+        angle_rad = math.radians(angle_degrees)
+        # Actual speed = radial_velocity / cos(angle)
+        # Handle edge case where angle approaches 90 degrees
+        cos_angle = math.cos(angle_rad)
+        if abs(cos_angle) < 1e-10:  # Avoid division by zero
+            cos_angle = 1e-10 if cos_angle >= 0 else -1e-10
+        actual_velocity_mps = radial_velocity_mps / cos_angle
+    
+    return actual_velocity_mps * MPS_TO_MPH
 
 def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True,
                 remove_time_segment_start=None, remove_time_segment_end=None, 
-                save_output=True):
+                save_output=True, angle_degrees=0.0):
     """
     Main analysis function.
     
@@ -314,6 +347,8 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
         remove_time_segment_start: Start time in seconds to remove (None to disable)
         remove_time_segment_end: End time in seconds to remove
         save_output: Whether to save processed audio to WAV file (default True)
+        angle_degrees: Angle between target motion and line-of-sight in degrees (0° = direct, default 0.0)
+                       Use 45° if targets are moving at 45 degrees to the sensor.
     """
     print(f"Loading WAV file: {filepath}")
     sample_rate, audio_data = load_wav_file(filepath)
@@ -341,14 +376,15 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
             print(f"Unknown noise reduction method: {noise_reduction}, skipping...")
     
     # Apply band-pass filter to reduce noise
-    print("Applying band-pass filter (50-4000 Hz)...")
-    audio_data_filtered = apply_bandpass_filter(audio_data, sample_rate, lowcut=50, highcut=4000)
+    print("Applying band-pass filter (100-2500 Hz)...")
+    audio_data_filtered = apply_bandpass_filter(audio_data, sample_rate, lowcut=100, highcut=2500)
     
-    # Create figure with subplots (max 1500x1000 pixels at 150 DPI)
+    # Create figure with subplots - spectrogram gets 50% of space
     fig = plt.figure(figsize=(10, 6.5))
+    gs = gridspec.GridSpec(4, 1, height_ratios=[1, 1, 2, 0], hspace=2.0)
     
-    # 1. Time domain plot (filtered signal)
-    ax1 = plt.subplot(3, 1, 1)
+    # 1. Time domain plot (filtered signal) - top 25%
+    ax1 = plt.subplot(gs[0])
     time_axis = np.linspace(0, duration, len(audio_data_filtered))
     ax1.plot(time_axis, audio_data_filtered)
     
@@ -366,12 +402,14 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
         title += f', removed {remove_time_segment_start:.1f}s-{remove_time_segment_end:.1f}s'
     if noise_reduction_enabled and noise_reduction:
         title += f', {noise_reduction} noise reduction'
-    title += ', 50-4000 Hz band-pass)'
+    if angle_degrees != 0.0:
+        title += f', {angle_degrees:.0f}° angle correction'
+    title += ', 100-2500 Hz band-pass)'
     ax1.set_title(title)
     ax1.grid(True, alpha=0.3)
     
-    # 2. Frequency spectrum (overall)
-    ax2 = plt.subplot(3, 1, 2)
+    # 2. Frequency spectrum (overall) - second 25%
+    ax2 = plt.subplot(gs[1])
     window_size = min(4096, len(audio_data_filtered) // 4)
     freqs, magnitude = compute_fft_spectrum(audio_data_filtered, sample_rate, window_size)
     
@@ -379,7 +417,7 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
     magnitude_db = 20 * np.log10(magnitude + 1e-10)
     
     # Filter out DC and very low frequencies
-    valid_idx = freqs > 50  # Ignore frequencies below 50 Hz
+    valid_idx = freqs > 100  # Ignore frequencies below 100 Hz
     freqs_filtered = freqs[valid_idx]
     magnitude_filtered = magnitude_db[valid_idx]
     
@@ -388,16 +426,19 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
     ax2.set_ylabel('Magnitude (dB)')
     ax2.set_title('Frequency Spectrum (Full Signal)')
     ax2.grid(True, alpha=0.3)
-    ax2.set_xlim([0, min(4000, sample_rate / 2)])
+    ax2.set_xlim([0, min(2500, sample_rate / 2)])
     
     # Add speed scale on top axis (for Doppler interpretation)
     ax2_top = ax2.twiny()
-    speed_axis = freqs_filtered / HZ_PER_MPS * MPS_TO_MPH
+    speed_axis = np.array([hz_to_mph(f, angle_degrees) for f in freqs_filtered])
     ax2_top.set_xlim(ax2.get_xlim())
-    ax2_top.set_xlabel('Speed (mph)')
+    speed_label = 'Speed (mph)'
+    if angle_degrees != 0.0:
+        speed_label += f' (angle-corrected, {angle_degrees:.0f}°)'
+    ax2_top.set_xlabel(speed_label)
     
-    # 3. Spectrogram
-    ax3 = plt.subplot(3, 1, 3)
+    # 3. Spectrogram - bottom 50%
+    ax3 = plt.subplot(gs[2])
     nperseg = min(2048, len(audio_data_filtered) // 20)
     noverlap = nperseg // 2
     frequencies, times, Sxx = compute_spectrogram(audio_data_filtered, sample_rate, nperseg, noverlap)
@@ -406,7 +447,7 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
     Sxx_db = 10 * np.log10(Sxx + 1e-10)
     
     # Limit frequency range for better visualization
-    max_freq_show = min(4000, sample_rate / 2)
+    max_freq_show = min(2500, sample_rate / 2)
     freq_mask = frequencies <= max_freq_show
     frequencies_show = frequencies[freq_mask]
     Sxx_show = Sxx_db[freq_mask, :]
@@ -427,16 +468,19 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
     
     # Add speed scale on right axis
     ax3_right = ax3.twinx()
-    speed_max = frequencies_show[-1] / HZ_PER_MPS * MPS_TO_MPH
+    speed_max = hz_to_mph(frequencies_show[-1], angle_degrees)
     ax3_right.set_ylim(ax3.get_ylim())
-    ax3_right.set_ylabel('Speed (mph)')
+    speed_label = 'Speed (mph)'
+    if angle_degrees != 0.0:
+        speed_label += f' (angle-corrected, {angle_degrees:.0f}°)'
+    ax3_right.set_ylabel(speed_label)
     # Set speed ticks on the right axis
     freq_ticks = ax3.get_yticks()
-    speed_ticks = freq_ticks / HZ_PER_MPS * MPS_TO_MPH
+    speed_ticks = np.array([hz_to_mph(f, angle_degrees) for f in freq_ticks])
     ax3_right.set_yticks(freq_ticks)
     ax3_right.set_yticklabels([f'{s:.1f}' for s in speed_ticks])
     
-    plt.tight_layout()
+    plt.tight_layout(pad=3.0)
     
     # Save the figure
     output_file = filepath.replace('.wav', '_analysis.png')
@@ -445,8 +489,11 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
     
     # Print statistics
     print("\n=== Analysis Statistics ===")
-    print(f"Peak frequency in overall spectrum: {freqs_filtered[np.argmax(magnitude_filtered)]:.2f} Hz")
-    print(f"Equivalent speed: {hz_to_mph(freqs_filtered[np.argmax(magnitude_filtered)]):.2f} mph")
+    if angle_degrees != 0.0:
+        print(f"Angle correction: {angle_degrees:.1f}° (correction factor: {1.0/math.cos(math.radians(angle_degrees)):.3f}x)")
+    peak_freq = freqs_filtered[np.argmax(magnitude_filtered)]
+    print(f"Peak frequency in overall spectrum: {peak_freq:.2f} Hz")
+    print(f"Equivalent speed: {hz_to_mph(peak_freq, angle_degrees):.2f} mph")
     
     # Find peaks in frequency domain
     peaks, properties = signal.find_peaks(magnitude_filtered, height=np.max(magnitude_filtered) - 20)
@@ -455,7 +502,7 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
         for i, peak_idx in enumerate(peaks[:10]):  # Show top 10
             freq = freqs_filtered[peak_idx]
             mag = magnitude_filtered[peak_idx]
-            speed = hz_to_mph(freq)
+            speed = hz_to_mph(freq, angle_degrees)
             print(f"  Peak {i+1}: {freq:.2f} Hz ({speed:.2f} mph) - magnitude: {mag:.2f} dB")
     
     # Analyze spectrogram for time-varying patterns
@@ -467,7 +514,7 @@ def analyze_wav(filepath, noise_reduction='wiener', noise_reduction_enabled=True
         if np.max(time_slice) > np.min(time_slice) + 10:  # Significant signal
             peak_idx = np.argmax(time_slice)
             freq_peak = frequencies_show[peak_idx]
-            speed = hz_to_mph(freq_peak)
+            speed = hz_to_mph(freq_peak, angle_degrees)
             max_speeds.append((times[t_idx], speed, freq_peak))
     
     if max_speeds:
@@ -517,6 +564,8 @@ Noise reduction options:
                        help='Start time in seconds to remove from signal (e.g., 16.0)')
     parser.add_argument('--remove-end', type=float, default=None,
                        help='End time in seconds to remove from signal (e.g., 22.0)')
+    parser.add_argument('--angle', type=float, default=45.0,
+                       help='Angle between target motion and line-of-sight in degrees (default: 45.0)')
     parser.add_argument('--no-save', action='store_true',
                        help='Do not save processed audio to WAV file')
     
@@ -544,13 +593,20 @@ Noise reduction options:
             print("Error: --remove-start must be less than --remove-end")
             sys.exit(1)
     
+    # Validate angle parameter
+    angle_degrees = args.angle
+    if angle_degrees < 0 or angle_degrees >= 90:
+        print("Warning: Angle should be between 0 and 90 degrees. Using absolute value.")
+        angle_degrees = abs(angle_degrees) % 90
+    
     try:
         results = analyze_wav(wav_file, 
                              noise_reduction=noise_reduction, 
                              noise_reduction_enabled=noise_reduction_enabled,
                              remove_time_segment_start=remove_start,
                              remove_time_segment_end=remove_end,
-                             save_output=not args.no_save)
+                             save_output=not args.no_save,
+                             angle_degrees=angle_degrees)
         print("\nAnalysis complete!")
     except Exception as e:
         print(f"Error during analysis: {e}")
